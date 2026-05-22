@@ -1,91 +1,53 @@
-/**
- * frontend/src/App.jsx
- * Root React component. Configures React Router with all pages.
- * Protected routes redirect to /login if user is not authenticated.
- */
-
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useAppStore } from './store/appStore';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import useAppStore from './store/appStore';
 
 // Pages
-import LandingPage       from './pages/LandingPage';
-import LoginPage         from './pages/LoginPage';
-import RegisterPage      from './pages/RegisterPage';
-import OnboardingPage    from './pages/OnboardingPage';
-import ListingsPage      from './pages/ListingsPage';
-import ListingDetailPage from './pages/ListingDetailPage';
-import MatchesPage       from './pages/MatchesPage';
-import MessagesPage      from './pages/MessagesPage';
-import AppointmentsPage  from './pages/AppointmentsPage';
-import Dashboard         from './pages/Dashboard';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import OnboardingPage from './pages/OnboardingPage';
+import DashboardPage from './pages/DashboardPage';
+import ListingsPage from './pages/ListingsPage';
+import MatchesPage from './pages/MatchesPage';
+import MessagesPage from './pages/MessagesPage';
+import AppointmentsPage from './pages/AppointmentsPage';
 
-// Components
-import Navbar from './components/Navbar';
-
-function ProtectedRoute({ children }) {
-  const { user } = useAppStore();
-  if (!user) return <Navigate to="/login" replace />;
-  return children;
+// Auth guard
+function PrivateRoute({ children }) {
+  const { isAuthenticated } = useAppStore();
+  return isAuthenticated ? children : <Navigate to="/login" replace />;
 }
 
-function OnboardingGuard({ children }) {
-  const { user } = useAppStore();
-  if (!user) return <Navigate to="/login" replace />;
-  if (user.onboardingCompleted) return <Navigate to="/dashboard" replace />;
-  return children;
+// Public route guard (redirect authenticated users)
+function PublicRoute({ children }) {
+  const { isAuthenticated, user } = useAppStore();
+  if (!isAuthenticated) return children;
+  if (!user?.onboardingComplete) return <Navigate to="/onboarding" replace />;
+  return <Navigate to="/dashboard" replace />;
 }
 
 export default function App() {
   return (
-    <Router>
+    <BrowserRouter>
       <div className="min-h-screen bg-gray-50">
-        <Navbar />
         <Routes>
           {/* Public routes */}
-          <Route path="/"          element={<LandingPage />} />
-          <Route path="/login"     element={<LoginPage />} />
-          <Route path="/register"  element={<RegisterPage />} />
-          <Route path="/listings"  element={<ListingsPage />} />
-          <Route path="/listings/:id" element={<ListingDetailPage />} />
+          <Route path="/" element={<Navigate to="/login" replace />} />
+          <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+          <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
 
-          {/* Onboarding — requires auth but NOT completed onboarding */}
-          <Route path="/onboarding" element={
-            <OnboardingGuard>
-              <OnboardingPage />
-            </OnboardingGuard>
-          } />
+          {/* Auth required routes */}
+          <Route path="/onboarding" element={<PrivateRoute><OnboardingPage /></PrivateRoute>} />
+          <Route path="/dashboard" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
+          <Route path="/listings" element={<PrivateRoute><ListingsPage /></PrivateRoute>} />
+          <Route path="/matches" element={<PrivateRoute><MatchesPage /></PrivateRoute>} />
+          <Route path="/messages" element={<PrivateRoute><MessagesPage /></PrivateRoute>} />
+          <Route path="/messages/:matchId" element={<PrivateRoute><MessagesPage /></PrivateRoute>} />
+          <Route path="/appointments" element={<PrivateRoute><AppointmentsPage /></PrivateRoute>} />
 
-          {/* Protected routes — require auth + completed onboarding */}
-          <Route path="/dashboard" element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          } />
-          <Route path="/matches" element={
-            <ProtectedRoute>
-              <MatchesPage />
-            </ProtectedRoute>
-          } />
-          <Route path="/messages" element={
-            <ProtectedRoute>
-              <MessagesPage />
-            </ProtectedRoute>
-          } />
-          <Route path="/messages/:matchId" element={
-            <ProtectedRoute>
-              <MessagesPage />
-            </ProtectedRoute>
-          } />
-          <Route path="/appointments" element={
-            <ProtectedRoute>
-              <AppointmentsPage />
-            </ProtectedRoute>
-          } />
-
-          {/* Catch-all */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Fallback */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </div>
-    </Router>
+    </BrowserRouter>
   );
 }
