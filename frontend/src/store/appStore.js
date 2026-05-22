@@ -74,4 +74,6 @@ const useAppStore = create(
   )
 );
 
+// Support both default and named imports
+export { useAppStore };
 export default useAppStore;
