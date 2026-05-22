@@ -1,3 +1,8 @@
+/**
+ * backend/src/routes/appointments.js
+ * Appointment management routes.
+ */
+
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
@@ -24,10 +29,10 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// POST /api/appointments - create appointment (Haven AI can also call this)
+// POST /api/appointments - create appointment
 router.post('/', auth, async (req, res) => {
   try {
-    const { matchId, scheduledAt, durationMinutes = 60, notes, meetingType = 'video' } = req.body;
+    const { matchId, scheduledAt, durationMins = 60, notes, type = 'video_call' } = req.body;
 
     if (!matchId || !scheduledAt) {
       return res.status(400).json({ error: 'matchId and scheduledAt are required' });
@@ -41,10 +46,13 @@ router.post('/', auth, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
+    const validTypes = ['video_call', 'in_person'];
+    const apptType = validTypes.includes(type) ? type : 'video_call';
+
     const result = await pool.query(
-      `INSERT INTO appointments (match_id, host_id, guest_id, listing_id, scheduled_at, duration_minutes, notes, meeting_type)
+      `INSERT INTO appointments (match_id, host_id, guest_id, listing_id, scheduled_at, duration_mins, notes, type)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [matchId, m.host_id, m.guest_id, m.listing_id, scheduledAt, durationMinutes, notes || null, meetingType]
+      [matchId, m.host_id, m.guest_id, m.listing_id, scheduledAt, durationMins, notes || null, apptType]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -53,7 +61,7 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// PUT /api/appointments/:id - update appointment status
+// PUT /api/appointments/:id - update appointment
 router.put('/:id', auth, async (req, res) => {
   try {
     const { status, scheduledAt, notes } = req.body;
@@ -69,7 +77,11 @@ router.put('/:id', auth, async (req, res) => {
     const values = [];
     let idx = 1;
 
-    if (status) { updates.push(`status = $${idx++}`); values.push(status); }
+    const validStatuses = ['pending', 'confirmed', 'cancelled', 'completed', 'no_show'];
+    if (status && validStatuses.includes(status)) {
+      updates.push(`status = $${idx++}`);
+      values.push(status);
+    }
     if (scheduledAt) { updates.push(`scheduled_at = $${idx++}`); values.push(scheduledAt); }
     if (notes !== undefined) { updates.push(`notes = $${idx++}`); values.push(notes); }
 
@@ -81,6 +93,28 @@ router.put('/:id', auth, async (req, res) => {
       values
     );
     res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/appointments/:id - cancel appointment
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const appt = await pool.query('SELECT * FROM appointments WHERE id = $1', [req.params.id]);
+    if (appt.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+
+    const a = appt.rows[0];
+    if (a.host_id !== req.user.userId && a.guest_id !== req.user.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    await pool.query(
+      "UPDATE appointments SET status = 'cancelled', cancelled_by = $1, cancel_reason = $2, updated_at = NOW() WHERE id = $3",
+      [req.user.userId, reason || null, req.params.id]
+    );
+    res.json({ message: 'Appointment cancelled' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
