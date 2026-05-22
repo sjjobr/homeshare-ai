@@ -4,47 +4,53 @@
  */
 
 const express = require('express');
-const router  = express.Router();
-const crypto  = require('crypto');
-const { PrismaClient } = require('@prisma/client');
-
-const prisma        = new PrismaClient();
-const tavusService  = require('../services/tavusService');
+const router = express.Router();
+const crypto = require('crypto');
+const { pool } = require('../db/pool');
+const auth = require('../middleware/auth');
+const tavusService = require('../services/tavusService');
 const matchingService = require('../services/matchingService');
-const { requireAuth } = require('../middleware/auth');
 
 // -----------------------------------------------------------------------
 // POST /api/tavus/conversation
 // Creates a new Tavus CVI conversation for the authenticated user.
-// Called when the user lands on the onboarding page.
 // -----------------------------------------------------------------------
-router.post('/conversation', requireAuth, async (req, res) => {
+router.post('/conversation', auth, async (req, res) => {
   try {
-    const user = req.user;
+    const { userId, role } = req.user;
 
-    // Build the webhook URL that Tavus will call when conversation ends
+    // Get user's name
+    const userResult = await pool.query(
+      'SELECT first_name, last_name FROM users WHERE id = $1',
+      [userId]
+    );
+    if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const { first_name, last_name } = userResult.rows[0];
+
     const webhookUrl = `${process.env.APP_BASE_URL}/api/tavus/webhook`;
 
     const conversation = await tavusService.createConversation({
-      userId:     user.id,
-      role:       user.role,
-      userName:   `${user.first_name} ${user.last_name}`,
+      userId,
+      role,
+      userName: `${first_name} ${last_name}`,
       webhookUrl,
     });
 
     // Persist conversation record
-    await prisma.tavusConversation.create({
-      data: {
-        userId:               user.id,
-        tavusConversationId:  conversation.conversationId,
-        personaId:            process.env.TAVUS_PERSONA_ID,
-        replicaId:            process.env.TAVUS_REPLICA_ID,
-        status:               'active',
-      },
-    });
+    await pool.query(
+      `INSERT INTO tavus_conversations (user_id, tavus_conversation_id, persona_id, replica_id, status)
+       VALUES ($1, $2, $3, $4, 'active')`,
+      [userId, conversation.conversationId, process.env.TAVUS_PERSONA_ID, process.env.TAVUS_REPLICA_ID]
+    );
+
+    // Also update the user's tavus_conversation_id
+    await pool.query(
+      'UPDATE users SET tavus_conversation_id = $1 WHERE id = $2',
+      [conversation.conversationId, userId]
+    );
 
     res.json({
-      conversationId:  conversation.conversationId,
+      conversationId: conversation.conversationId,
       conversationUrl: conversation.conversationUrl,
     });
   } catch (error) {
@@ -55,33 +61,39 @@ router.post('/conversation', requireAuth, async (req, res) => {
 
 // -----------------------------------------------------------------------
 // GET /api/tavus/conversation/:id
-// Fetches the status and metadata of a specific conversation.
+// Fetches the status of a specific conversation.
 // -----------------------------------------------------------------------
-router.get('/conversation/:id', requireAuth, async (req, res) => {
+router.get('/conversation/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const localRecord = await prisma.tavusConversation.findFirst({
-      where: {
-        tavusConversationId: id,
-        userId: req.user.id,
-      },
-    });
+    const result = await pool.query(
+      'SELECT * FROM tavus_conversations WHERE tavus_conversation_id = $1 AND user_id = $2',
+      [id, req.user.userId]
+    );
 
-    if (!localRecord) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    // Also fetch live status from Tavus API
-    const liveData = await tavusService.getConversation(id);
+    const record = result.rows[0];
+
+    // Fetch live status from Tavus API
+    let liveStatus = record.status;
+    try {
+      const liveData = await tavusService.getConversation(id);
+      liveStatus = liveData.status || record.status;
+    } catch (e) {
+      // Tavus API error — use local status
+    }
 
     res.json({
-      id:             localRecord.id,
+      id: record.id,
       conversationId: id,
-      status:         liveData.status || localRecord.status,
-      extractedData:  localRecord.extractedData,
-      startedAt:      localRecord.startedAt,
-      endedAt:        localRecord.endedAt,
+      status: liveStatus,
+      extractedData: record.extracted_data,
+      startedAt: record.started_at,
+      endedAt: record.ended_at,
     });
   } catch (error) {
     console.error('Error fetching conversation:', error.message);
@@ -93,16 +105,15 @@ router.get('/conversation/:id', requireAuth, async (req, res) => {
 // POST /api/tavus/conversation/:id/end
 // Manually ends an active conversation.
 // -----------------------------------------------------------------------
-router.post('/conversation/:id/end', requireAuth, async (req, res) => {
+router.post('/conversation/:id/end', auth, async (req, res) => {
   try {
     const { id } = req.params;
-
     await tavusService.endConversation(id);
 
-    await prisma.tavusConversation.updateMany({
-      where: { tavusConversationId: id, userId: req.user.id },
-      data:  { status: 'ended', endedAt: new Date() },
-    });
+    await pool.query(
+      "UPDATE tavus_conversations SET status = 'ended', ended_at = NOW() WHERE tavus_conversation_id = $1 AND user_id = $2",
+      [id, req.user.userId]
+    );
 
     res.json({ success: true });
   } catch (error) {
@@ -113,18 +124,19 @@ router.post('/conversation/:id/end', requireAuth, async (req, res) => {
 
 // -----------------------------------------------------------------------
 // POST /api/tavus/webhook
-// Receives the conversation transcript and extracted data from Tavus.
-// This is called by Tavus servers, NOT by the frontend.
+// Receives the conversation transcript from Tavus when conversation ends.
+// Called by Tavus servers, NOT the frontend.
 // -----------------------------------------------------------------------
 router.post('/webhook', async (req, res) => {
   try {
-    // Verify the webhook signature (optional but recommended)
+    // Verify webhook signature
     const webhookSecret = process.env.TAVUS_WEBHOOK_SECRET;
     if (webhookSecret) {
       const signature = req.headers['x-tavus-signature'];
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
       const expectedSig = crypto
         .createHmac('sha256', webhookSecret)
-        .update(JSON.stringify(req.body))
+        .update(body)
         .digest('hex');
 
       if (signature !== expectedSig) {
@@ -133,37 +145,31 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    // Parse the payload
+    const payload = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString()) : req.body;
     const { userId, conversationId, status, transcript, extractedData } =
-      tavusService.parseWebhookPayload(req.body);
+      tavusService.parseWebhookPayload(payload);
 
     if (!userId || !conversationId) {
       return res.status(400).json({ error: 'Missing userId or conversationId' });
     }
 
-    // Update the conversation record with the transcript and extracted data
-    await prisma.tavusConversation.updateMany({
-      where: { tavusConversationId: conversationId },
-      data: {
-        status:        status === 'ended' ? 'ended' : 'active',
-        rawTranscript: transcript,
-        extractedData: extractedData,
-        endedAt:       status === 'ended' ? new Date() : undefined,
-      },
-    });
+    // Update conversation record
+    await pool.query(
+      `UPDATE tavus_conversations
+       SET status = $1, raw_transcript = $2, extracted_data = $3, ended_at = CASE WHEN $1 = 'ended' THEN NOW() ELSE ended_at END
+       WHERE tavus_conversation_id = $4`,
+      [status === 'ended' ? 'ended' : 'active', transcript, JSON.stringify(extractedData), conversationId]
+    );
 
-    // Auto-populate the user profile with extracted data
+    // Auto-populate user profile and run matching
     if (extractedData && status === 'ended') {
       await updateUserProfile(userId, extractedData);
-
-      // Run the matching algorithm after onboarding completes
       await matchingService.generateMatchesForUser(userId);
     }
 
     res.json({ received: true });
   } catch (error) {
     console.error('Webhook processing error:', error.message);
-    // Always respond 200 to Tavus to prevent retries for logic errors
     res.json({ received: true, error: error.message });
   }
 });
@@ -172,36 +178,38 @@ router.post('/webhook', async (req, res) => {
 // Helpers
 // -----------------------------------------------------------------------
 async function updateUserProfile(userId, data) {
-  const updateData = {
-    onboardingCompleted: true,
-    bio: data.bio || undefined,
-    personalityTags: buildPersonalityTags(data),
-    lifestyleScore: data.lifestyle || {},
-  };
-
-  await prisma.user.update({
-    where: { id: userId },
-    data:  updateData,
-  });
-
-  // If they are a guest, also update their budget preference
-  if (data.role === 'guest' && data.budget) {
-    await prisma.guestPreference.upsert({
-      where:  { userId },
-      update: { maxBudget: data.budget * 100 }, // store in cents
-      create: { userId, maxBudget: data.budget * 100 },
-    });
-  }
-}
-
-function buildPersonalityTags(data) {
   const tags = [];
-  if (data.lifestyle?.quiet)      tags.push('quiet');
-  if (data.lifestyle?.social)     tags.push('social');
-  if (data.lifestyle?.hasPets)    tags.push('has-pets');
+  if (data.lifestyle?.quiet) tags.push('quiet');
+  if (data.lifestyle?.social) tags.push('social');
+  if (data.lifestyle?.hasPets) tags.push('has-pets');
   if (data.lifestyle?.earlyRiser) tags.push('early-riser');
-  if (data.helperExchange)        tags.push('open-to-helper');
-  return tags;
+  if (data.helperExchange) tags.push('open-to-helper');
+
+  await pool.query(
+    `UPDATE users SET
+       onboarding_complete = true,
+       bio = COALESCE($1, bio),
+       personality_tags = $2,
+       lifestyle_preferences = $3,
+       helper_exchange = $4,
+       updated_at = NOW()
+     WHERE id = $5`,
+    [
+      data.bio || null,
+      tags,
+      data.lifestyle ? JSON.stringify(data.lifestyle) : null,
+      data.helperExchange || false,
+      userId,
+    ]
+  );
+
+  // If guest, update budget
+  if (data.role === 'guest' && data.budget) {
+    await pool.query(
+      'UPDATE users SET budget_max = $1 WHERE id = $2',
+      [data.budget * 100, userId] // store in cents
+    );
+  }
 }
 
 module.exports = router;
