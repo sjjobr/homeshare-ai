@@ -23,17 +23,17 @@ CREATE TABLE users (
   zip_code VARCHAR(20),
   verified BOOLEAN DEFAULT FALSE,
 
-  -- Guest-specific fields
-  budget_min INTEGER,            -- monthly rent min in cents
-  budget_max INTEGER,            -- monthly rent max in cents
+  -- Guest preference fields (populated by Tavus AI)
+  budget_min INTEGER,             -- monthly rent min in cents
+  budget_max INTEGER,             -- monthly rent max in cents
   move_in_date DATE,
-  lifestyle_preferences JSONB,   -- {morning_person: 8, social: 3, pets_ok: 1}
+  lifestyle_preferences JSONB,    -- e.g. {morning_person: 8, social: 3}
   helper_exchange BOOLEAN DEFAULT FALSE,
 
-  -- Profile data collected by Tavus AI agent
+  -- Tavus onboarding
   tavus_conversation_id TEXT,
   onboarding_complete BOOLEAN DEFAULT FALSE,
-  personality_tags TEXT[],       -- e.g. ['quiet', 'tidy', 'social']
+  personality_tags TEXT[],        -- e.g. ['quiet', 'tidy', 'social']
 
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -51,31 +51,34 @@ CREATE TABLE listings (
   address TEXT NOT NULL,
   city VARCHAR(100) NOT NULL,
   state VARCHAR(100) NOT NULL,
-  zip VARCHAR(20) NOT NULL,
+  zip_code VARCHAR(20) NOT NULL,
   country VARCHAR(100) DEFAULT 'US',
   latitude DECIMAL(10,7),
   longitude DECIMAL(10,7),
   region VARCHAR(100),
 
-  monthly_rent INTEGER NOT NULL,    -- in cents
-  deposit INTEGER,                  -- in cents
-  min_stay_months INTEGER DEFAULT 1,
-  max_stay_months INTEGER,          -- NULL = unlimited
-
-  bedrooms INTEGER NOT NULL DEFAULT 1,
-  bathrooms DECIMAL(3,1),
-  sqft INTEGER,
-  furnished BOOLEAN DEFAULT TRUE,
+  monthly_rent_cents INTEGER NOT NULL,    -- rent in cents
+  deposit_cents INTEGER,                  -- deposit in cents
+  room_type VARCHAR(50),                  -- 'private', 'shared', 'suite'
+  total_rooms INTEGER DEFAULT 1,
+  bathroom_type VARCHAR(50),              -- 'private', 'shared'
+  square_footage INTEGER,
+  is_furnished BOOLEAN DEFAULT TRUE,
   utilities_included BOOLEAN DEFAULT TRUE,
+  pets_allowed BOOLEAN DEFAULT FALSE,
+  smoking_allowed BOOLEAN DEFAULT FALSE,
+  min_stay_months INTEGER DEFAULT 1,
+  max_stay_months INTEGER,
 
-  amenities TEXT[],                 -- ['wifi', 'parking', 'laundry', 'kitchen']
-  house_rules TEXT[],               -- ['no smoking', 'no pets', 'quiet hours 10pm']
-  helper_exchange BOOLEAN DEFAULT FALSE,
-  helper_tasks TEXT[],              -- ['grocery shopping', 'light cooking']
-  helper_discount INTEGER DEFAULT 0, -- cents/month reduction for help
+  helper_exchange_available BOOLEAN DEFAULT FALSE,
+  helper_exchange_details TEXT,
+  helper_discount_cents INTEGER DEFAULT 0,
 
-  photo_urls TEXT[],
-  status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active','paused','rented','deleted')),
+  amenities TEXT[],                       -- ['wifi', 'parking', 'laundry']
+  photos TEXT[],                          -- array of URLs
+  is_active BOOLEAN DEFAULT TRUE,
+  available_from DATE,
+  available_to DATE,
 
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -90,16 +93,13 @@ CREATE TABLE matches (
   host_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   guest_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 
-  compatibility_score INTEGER NOT NULL DEFAULT 0,  -- 0-100
-  score_breakdown JSONB,  -- {lifestyle: 30, budget: 25, location: 20, rules: 25}
+  compatibility_score INTEGER NOT NULL DEFAULT 0,   -- 0-100
+  score_breakdown JSONB,
 
   host_status VARCHAR(20) DEFAULT 'pending' CHECK (host_status IN ('pending','liked','passed')),
   guest_status VARCHAR(20) DEFAULT 'pending' CHECK (guest_status IN ('pending','liked','passed')),
-
-  -- Mutual like = connected
-  connected BOOLEAN GENERATED ALWAYS AS (
-    host_status = 'liked' AND guest_status = 'liked'
-  ) STORED,
+  status VARCHAR(20) DEFAULT 'pending'
+    CHECK (status IN ('pending','liked','passed','connected','rejected')),
 
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -108,7 +108,7 @@ CREATE TABLE matches (
 );
 
 -- ============================================================
--- APPOINTMENTS (viewing or video meet-and-greet)
+-- APPOINTMENTS
 -- ============================================================
 CREATE TABLE appointments (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -120,7 +120,7 @@ CREATE TABLE appointments (
   type VARCHAR(20) NOT NULL CHECK (type IN ('video_call', 'in_person')),
   scheduled_at TIMESTAMPTZ NOT NULL,
   duration_mins INTEGER DEFAULT 30,
-  location TEXT,    -- for in_person: address; for video: join link
+  location TEXT,
   notes TEXT,
 
   status VARCHAR(20) DEFAULT 'pending'
@@ -140,10 +140,8 @@ CREATE TABLE messages (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   match_id UUID NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
   sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-
   content TEXT NOT NULL,
   read BOOLEAN DEFAULT FALSE,
-
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -156,14 +154,10 @@ CREATE TABLE tavus_conversations (
   tavus_conversation_id TEXT UNIQUE NOT NULL,
   persona_id TEXT,
   replica_id TEXT,
-
   status VARCHAR(20) DEFAULT 'active'
     CHECK (status IN ('active','ended','failed')),
-
-  -- Extracted structured data from the conversation
   extracted_data JSONB,
   raw_transcript TEXT,
-
   started_at TIMESTAMPTZ DEFAULT NOW(),
   ended_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -173,12 +167,12 @@ CREATE TABLE tavus_conversations (
 -- INDEXES
 -- ============================================================
 CREATE INDEX idx_listings_host_id ON listings(host_id);
-CREATE INDEX idx_listings_status ON listings(status);
+CREATE INDEX idx_listings_is_active ON listings(is_active);
 CREATE INDEX idx_listings_city ON listings(city);
-CREATE INDEX idx_listings_rent ON listings(monthly_rent);
+CREATE INDEX idx_listings_rent ON listings(monthly_rent_cents);
 CREATE INDEX idx_matches_listing ON matches(listing_id);
 CREATE INDEX idx_matches_guest ON matches(guest_id);
-CREATE INDEX idx_matches_connected ON matches(connected);
+CREATE INDEX idx_matches_status ON matches(status);
 CREATE INDEX idx_appointments_match ON appointments(match_id);
 CREATE INDEX idx_appointments_time ON appointments(scheduled_at);
 CREATE INDEX idx_messages_match ON messages(match_id);
