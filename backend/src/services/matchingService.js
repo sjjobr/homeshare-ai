@@ -1,32 +1,29 @@
 /**
  * matchingService.js
  * Compatibility scoring between Hosts and Guests.
- * Generates and updates match records in the database.
+ * Uses pg pool directly — no ORM.
  */
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { pool } = require('../db/pool');
 
 // Weights for each compatibility dimension (must sum to 100)
 const WEIGHTS = {
-  budget:    30,   // Guest budget vs listing rent
-  lifestyle: 35,   // Lifestyle / personality alignment
-  location:  15,   // City / region match
-  rules:     20,   // House rule compatibility
+  budget: 30,
+  lifestyle: 35,
+  location: 15,
+  rules: 20,
 };
 
 // -----------------------------------------------------------------------
 // generateMatchesForUser
 // Called after a user completes onboarding.
-// Creates match records with compatibility scores.
 // -----------------------------------------------------------------------
 async function generateMatchesForUser(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { guestPreference: true },
-  });
+  const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+  if (userResult.rows.length === 0) return;
 
-  if (!user || !user.onboardingCompleted) return;
+  const user = userResult.rows[0];
+  if (!user.onboarding_complete) return;
 
   if (user.role === 'guest') {
     await matchGuestToListings(user);
@@ -37,183 +34,154 @@ async function generateMatchesForUser(userId) {
 
 // -----------------------------------------------------------------------
 // matchGuestToListings
-// For a guest, score every active listing and create/update match records.
 // -----------------------------------------------------------------------
 async function matchGuestToListings(guest) {
-  const listings = await prisma.listing.findMany({
-    where:   { status: 'active' },
-    include: { host: true },
-  });
+  const listingsResult = await pool.query(
+    `SELECT l.*, u.personality_tags as host_tags, u.city as host_city
+     FROM listings l
+     JOIN users u ON l.host_id = u.id
+     WHERE l.is_active = true`
+  );
+  const listings = listingsResult.rows;
 
-  const matchData = listings.map((listing) => {
+  for (const listing of listings) {
     const score = calculateScore(guest, listing);
-    return {
-      listingId:          listing.id,
-      hostId:             listing.hostId,
-      guestId:            guest.id,
-      compatibilityScore: score.total,
-      scoreBreakdown:     score.breakdown,
-    };
-  });
-
-  // Upsert match records (update if already exists)
-  for (const match of matchData) {
-    await prisma.match.upsert({
-      where: {
-        listingId_guestId: {
-          listingId: match.listingId,
-          guestId:   match.guestId,
-        },
-      },
-      update: {
-        compatibilityScore: match.compatibilityScore,
-        scoreBreakdown:     match.scoreBreakdown,
-      },
-      create: match,
-    });
+    await pool.query(
+      `INSERT INTO matches (listing_id, host_id, guest_id, compatibility_score, score_breakdown)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (listing_id, guest_id)
+       DO UPDATE SET compatibility_score = EXCLUDED.compatibility_score,
+                     score_breakdown = EXCLUDED.score_breakdown,
+                     updated_at = NOW()`,
+      [listing.id, listing.host_id, guest.id, score.total, JSON.stringify(score.breakdown)]
+    );
   }
-
-  console.log(`Generated ${matchData.length} matches for guest ${guest.id}`);
+  console.log(`Generated ${listings.length} matches for guest ${guest.id}`);
 }
 
 // -----------------------------------------------------------------------
 // matchHostListingsToGuests
-// When a host completes onboarding or updates a listing,
-// score all eligible guests against their listings.
 // -----------------------------------------------------------------------
 async function matchHostListingsToGuests(host) {
-  const listings = await prisma.listing.findMany({
-    where: { hostId: host.id, status: 'active' },
-  });
+  const listingsResult = await pool.query(
+    'SELECT * FROM listings WHERE host_id = $1 AND is_active = true',
+    [host.id]
+  );
+  const guestsResult = await pool.query(
+    'SELECT * FROM users WHERE role = $1 AND onboarding_complete = true',
+    ['guest']
+  );
 
-  const guests = await prisma.user.findMany({
-    where:   { role: 'guest', onboardingCompleted: true },
-    include: { guestPreference: true },
-  });
-
-  for (const listing of listings) {
-    for (const guest of guests) {
+  for (const listing of listingsResult.rows) {
+    for (const guest of guestsResult.rows) {
       const score = calculateScore(guest, listing);
-
-      await prisma.match.upsert({
-        where: {
-          listingId_guestId: {
-            listingId: listing.id,
-            guestId:   guest.id,
-          },
-        },
-        update: {
-          compatibilityScore: score.total,
-          scoreBreakdown:     score.breakdown,
-        },
-        create: {
-          listingId:          listing.id,
-          hostId:             host.id,
-          guestId:            guest.id,
-          compatibilityScore: score.total,
-          scoreBreakdown:     score.breakdown,
-        },
-      });
+      await pool.query(
+        `INSERT INTO matches (listing_id, host_id, guest_id, compatibility_score, score_breakdown)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (listing_id, guest_id)
+         DO UPDATE SET compatibility_score = EXCLUDED.compatibility_score,
+                       score_breakdown = EXCLUDED.score_breakdown,
+                       updated_at = NOW()`,
+        [listing.id, host.id, guest.id, score.total, JSON.stringify(score.breakdown)]
+      );
     }
   }
 }
 
 // -----------------------------------------------------------------------
-// calculateScore
-// Core algorithm: returns { total: 0-100, breakdown: {...} }
+// findMatches — called from matches.js route
+// Returns scored matches for a user (for manual regeneration)
+// -----------------------------------------------------------------------
+async function findMatches(user, poolParam) {
+  const db = poolParam || pool;
+  if (user.role === 'guest') {
+    await matchGuestToListings(user);
+  } else {
+    await matchHostListingsToGuests(user);
+  }
+
+  const result = await db.query(
+    'SELECT * FROM matches WHERE guest_id = $1 OR host_id = $1 ORDER BY compatibility_score DESC',
+    [user.id]
+  );
+  return result.rows;
+}
+
+// -----------------------------------------------------------------------
+// calculateScore — core scoring algorithm
 // -----------------------------------------------------------------------
 function calculateScore(guest, listing) {
   const breakdown = {
-    budget:    scoreBudget(guest, listing),
+    budget: scoreBudget(guest, listing),
     lifestyle: scoreLifestyle(guest, listing),
-    location:  scoreLocation(guest, listing),
-    rules:     scoreRules(guest, listing),
+    location: scoreLocation(guest, listing),
+    rules: scoreRules(guest, listing),
   };
 
   const total = Math.round(
-    (breakdown.budget    * WEIGHTS.budget    +
-     breakdown.lifestyle * WEIGHTS.lifestyle +
-     breakdown.location  * WEIGHTS.location  +
-     breakdown.rules     * WEIGHTS.rules
-    ) / 100
+    (breakdown.budget * WEIGHTS.budget +
+      breakdown.lifestyle * WEIGHTS.lifestyle +
+      breakdown.location * WEIGHTS.location +
+      breakdown.rules * WEIGHTS.rules) / 100
   );
 
   return { total, breakdown };
 }
 
-// Budget score: how well does the guest's max budget align with the listing rent?
 function scoreBudget(guest, listing) {
-  const maxBudget = guest.guestPreference?.maxBudget || 0;  // cents
-  const rent      = listing.monthlyRent;                    // cents
+  const maxBudget = guest.budget_max || 0;  // cents
+  const rent = listing.monthly_rent_cents;  // cents
 
-  if (maxBudget === 0) return 50; // No preference = neutral
+  if (maxBudget === 0) return 50;
 
   if (rent <= maxBudget) {
-    // Well within budget: scale 70-100
     const ratio = rent / maxBudget;
     return Math.round(70 + (1 - ratio) * 30);
   } else {
-    // Over budget: penalise
     const overBy = (rent - maxBudget) / maxBudget;
-    if (overBy > 0.3) return 0;          // 30%+ over budget = 0
+    if (overBy > 0.3) return 0;
     return Math.round(70 * (1 - overBy / 0.3));
   }
 }
 
-// Lifestyle score: compare personality tags and lifestyle attributes
 function scoreLifestyle(guest, listing) {
-  const guestTags   = new Set(guest.personalityTags  || []);
-  const hostTags    = new Set(listing.host?.personalityTags || []);
+  const guestTags = new Set(guest.personality_tags || []);
+  const hostTags = new Set(listing.host_tags || []);
 
-  // Helper exchange alignment
   const guestWantsHelper = guestTags.has('open-to-helper');
-  const hostWantsHelper  = listing.helperExchange;
-  const helperMatch = (guestWantsHelper && hostWantsHelper) ? 20 :
-                      (!guestWantsHelper && !hostWantsHelper) ? 10 : -10;
+  const hostWantsHelper = listing.helper_exchange_available;
+  const helperMatch = (guestWantsHelper && hostWantsHelper) ? 20
+    : (!guestWantsHelper && !hostWantsHelper) ? 10 : -10;
 
-  // Noise level alignment
-  const guestQuiet = guestTags.has('quiet');
-  const noSmokingMatch = (guestTags.has('no-smoking') && listing.houseRules?.includes('no smoking')) ? 10 : 0;
-
-  // Shared tags bonus
   let sharedCount = 0;
   for (const tag of guestTags) {
     if (hostTags.has(tag)) sharedCount++;
   }
   const sharedBonus = Math.min(sharedCount * 10, 30);
 
-  return Math.min(Math.max(50 + helperMatch + noSmokingMatch + sharedBonus, 0), 100);
+  return Math.min(Math.max(50 + helperMatch + sharedBonus, 0), 100);
 }
 
-// Location score: do they match on city or region?
 function scoreLocation(guest, listing) {
-  const guestCity   = (guest.lifestyleScore?.preferredCity   || '').toLowerCase();
-  const guestRegion = (guest.lifestyleScore?.preferredRegion || '').toLowerCase();
+  const guestCity = (guest.city || '').toLowerCase();
+  const listingCity = (listing.city || '').toLowerCase();
 
-  if (!guestCity && !guestRegion) return 60; // No preference = neutral
+  if (!guestCity) return 60;
+  if (listingCity.includes(guestCity) || guestCity.includes(listingCity)) return 100;
 
-  const listingCity   = (listing.city   || '').toLowerCase();
-  const listingRegion = (listing.region || '').toLowerCase();
+  const guestState = (guest.state || '').toLowerCase();
+  const listingState = (listing.state || '').toLowerCase();
+  if (guestState && guestState === listingState) return 70;
 
-  if (guestCity && listingCity.includes(guestCity))       return 100;
-  if (guestRegion && listingRegion.includes(guestRegion)) return 80;
   return 20;
 }
 
-// Rules score: check for dealbreakers
 function scoreRules(guest, listing) {
-  const rules = listing.houseRules || [];
-  let score = 80; // Start high
+  const guestTags = guest.personality_tags || [];
+  let score = 80;
 
-  if (rules.includes('no pets') && (guest.personalityTags || []).includes('has-pets')) {
-    score -= 60; // Dealbreaker
-  }
-  if (rules.includes('no smoking') && (guest.personalityTags || []).includes('smoker')) {
-    score -= 60;
-  }
-  if (listing.minStayMonths > (guest.lifestyleScore?.maxStayMonths || 24)) {
-    score -= 30;
-  }
+  if (!listing.pets_allowed && guestTags.includes('has-pets')) score -= 60;
+  if (!listing.smoking_allowed && guestTags.includes('smoker')) score -= 60;
 
   return Math.max(score, 0);
 }
@@ -222,5 +190,6 @@ module.exports = {
   generateMatchesForUser,
   matchGuestToListings,
   matchHostListingsToGuests,
+  findMatches,
   calculateScore,
 };
