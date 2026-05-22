@@ -85,30 +85,31 @@ export default function TavusVideoAgent({ onConversationComplete }) {
   // -----------------------------------------------------------------------
   if (status === 'idle') {
     return (
-      <div className="flex flex-col items-center justify-center p-8 bg-warm-cream rounded-2xl border border-warm-200 shadow-sm">
+      <div className="flex flex-col items-center justify-center p-5 sm:p-8 bg-warm-cream rounded-2xl border border-warm-200 shadow-sm">
         <div className="mb-6 text-center">
-          <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-teal-100 flex items-center justify-center">
-            <svg className="w-10 h-10 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto mb-4 rounded-full bg-teal-100 flex items-center justify-center">
+            <svg className="w-8 h-8 sm:w-10 sm:h-10 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                 d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
             </svg>
           </div>
-          <h2 className="text-2xl font-semibold text-gray-800 mb-2">
+          <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-2">
             Meet Haven, Your Guide
           </h2>
-          <p className="text-gray-600 max-w-md">
+          <p className="text-gray-600 max-w-md text-sm sm:text-base">
             Haven is our friendly AI who will ask you a few friendly questions to set up your
             profile — right here, face to face. It only takes about 5 minutes.
           </p>
         </div>
         <button
           onClick={startConversation}
-          className="px-8 py-3 bg-teal-600 text-white rounded-full font-medium hover:bg-teal-700 
-                     transition-colors shadow-md hover:shadow-lg"
+          className="w-full sm:w-auto px-6 sm:px-8 py-3 bg-teal-600 text-white rounded-full font-medium
+                     hover:bg-teal-700 transition-colors shadow-md hover:shadow-lg
+                     text-base min-h-[48px]"
         >
           Start Conversation with Haven
         </button>
-        <p className="mt-4 text-sm text-gray-400">
+        <p className="mt-4 text-xs sm:text-sm text-gray-500 text-center">
           Make sure your camera and microphone are enabled.
         </p>
       </div>
@@ -159,22 +160,30 @@ export default function TavusVideoAgent({ onConversationComplete }) {
   }
 
   // status === 'active'
+  // Mobile: tall iframe that fills most of the viewport for an immersive video-call feel.
+  // sm+ (≥640px): 16:9 widescreen, capped by max-height so it doesn't push the Skip button off-screen.
   return (
     <div className="w-full">
-      <div className="relative w-full" style={{ paddingBottom: '56.25%', height: 0 }}>
+      <div
+        className="relative w-full overflow-hidden rounded-2xl shadow-lg
+                   h-[calc(100dvh-220px)] min-h-[420px]
+                   sm:h-auto sm:aspect-video sm:max-h-[70vh]"
+      >
         <iframe
           ref={iframeRef}
           src={conversationUrl}
           title="HomeShare AI Agent - Haven"
-          allow="camera; microphone; fullscreen"
-          className="absolute inset-0 w-full h-full rounded-2xl border-0 shadow-lg"
+          allow="camera; microphone; fullscreen; autoplay; display-capture"
+          allowFullScreen
+          className="absolute inset-0 w-full h-full border-0"
           sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
         />
       </div>
-      <div className="mt-4 text-center">
+      <div className="mt-4 pb-[env(safe-area-inset-bottom)] text-center">
         <button
           onClick={endConversation}
-          className="text-sm text-gray-400 hover:text-gray-600 underline transition-colors"
+          className="text-sm text-gray-500 hover:text-gray-700 underline transition-colors
+                     min-h-[44px] px-4"
         >
           Skip and fill in manually instead
         </button>

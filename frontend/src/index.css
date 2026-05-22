@@ -7,6 +7,7 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     font-size: 16px;
     line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
@@ -14,10 +15,15 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  h1 { @apply text-4xl font-bold tracking-tight; }
-  h2 { @apply text-3xl font-semibold; }
-  h3 { @apply text-2xl font-semibold; }
-  h4 { @apply text-xl font-medium; }
+  h1 { @apply text-3xl sm:text-4xl font-bold tracking-tight; }
+  h2 { @apply text-2xl sm:text-3xl font-semibold; }
+  h3 { @apply text-xl sm:text-2xl font-semibold; }
+  h4 { @apply text-lg sm:text-xl font-medium; }
+
+  /* Prevent iOS zoom when focusing form inputs */
+  input, select, textarea {
+    font-size: 16px;
+  }
 }
 
 @layer components {

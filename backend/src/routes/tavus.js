@@ -55,7 +55,11 @@ router.post('/conversation', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating Tavus conversation:', error.message);
-    res.status(500).json({ error: 'Failed to start conversation' });
+    if (error.response) {
+      console.error('Tavus API response status:', error.response.status);
+      console.error('Tavus API response body:', JSON.stringify(error.response.data, null, 2));
+    }
+    res.status(500).json({ error: 'Failed to start conversation', details: error.response?.data });
   }
 });
 
@@ -146,8 +150,10 @@ router.post('/webhook', async (req, res) => {
     }
 
     const payload = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString()) : req.body;
-    const { userId, conversationId, status, transcript, extractedData } =
-      tavusService.parseWebhookPayload(payload);
+    const parsed = tavusService.parseWebhookPayload(payload);
+    // user_id arrives as a query param on the callback URL (modern Tavus API)
+    const userId = parsed.userId || req.query.user_id;
+    const { conversationId, status, transcript, extractedData } = parsed;
 
     if (!userId || !conversationId) {
       return res.status(400).json({ error: 'Missing userId or conversationId' });

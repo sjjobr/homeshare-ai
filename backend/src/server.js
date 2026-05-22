@@ -23,6 +23,10 @@ const tavusRoutes        = require('./routes/tavus');
 const app  = express();
 const PORT = process.env.PORT || 4000;
 
+// Trust the platform proxy (Vercel/Railway/etc) so req.ip and rate limiting
+// pick up the real client IP from X-Forwarded-For instead of the load balancer.
+app.set('trust proxy', 1);
+
 // -----------------------------------------------------------------------
 // Middleware
 // -----------------------------------------------------------------------
@@ -79,8 +83,12 @@ app.use((err, req, res, next) => {
 // -----------------------------------------------------------------------
 // Start
 // -----------------------------------------------------------------------
-app.listen(PORT, () => {
-  console.log(`HomeShare AI API running on http://localhost:${PORT}`);
-});
+// On Vercel, the platform invokes the exported Express app directly — no listen().
+// In local dev (no VERCEL env var) we start the HTTP server.
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`HomeShare AI API running on http://localhost:${PORT}`);
+  });
+}
 
 module.exports = app;

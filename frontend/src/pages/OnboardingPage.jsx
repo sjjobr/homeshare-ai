@@ -34,8 +34,11 @@ export default function OnboardingPage() {
   // -----------------------------------------------------------------------
   const handleRoleSelect = async (selectedRole) => {
     setRole(selectedRole);
-    // Save role to backend
-    await api.patch('/users/me', { role: selectedRole });
+    try {
+      await api.patch('/users/me', { role: selectedRole });
+    } catch (err) {
+      console.warn('Could not save role to backend:', err);
+    }
     setStep(STEPS.AI_INTERVIEW);
   };
 
@@ -72,24 +75,26 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-warm-50 to-teal-50">
       {/* Progress indicator */}
-      <div className="max-w-2xl mx-auto pt-8 px-4">
-        <div className="flex items-center gap-2 mb-8">
-          {[STEPS.CHOOSE_ROLE, STEPS.AI_INTERVIEW, STEPS.REVIEW_PROFILE].map((s, i) => (
-            <div key={s} className="flex items-center">
-              <div className={
-                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ' +
-                (step === s
-                  ? 'bg-teal-600 text-white'
-                  : [STEPS.AI_INTERVIEW, STEPS.REVIEW_PROFILE, STEPS.COMPLETE].indexOf(step) > i
-                    ? 'bg-teal-200 text-teal-800'
-                    : 'bg-gray-200 text-gray-500')
-              }>
-                {i + 1}
+      <div className="max-w-2xl mx-auto pt-6 sm:pt-8 px-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-6 sm:mb-8">
+          <div className="flex items-center gap-1">
+            {[STEPS.CHOOSE_ROLE, STEPS.AI_INTERVIEW, STEPS.REVIEW_PROFILE].map((s, i) => (
+              <div key={s} className="flex items-center">
+                <div className={
+                  'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ' +
+                  (step === s
+                    ? 'bg-teal-600 text-white'
+                    : [STEPS.AI_INTERVIEW, STEPS.REVIEW_PROFILE, STEPS.COMPLETE].indexOf(step) > i
+                      ? 'bg-teal-200 text-teal-800'
+                      : 'bg-gray-200 text-gray-500')
+                }>
+                  {i + 1}
+                </div>
+                {i < 2 && <div className="w-8 sm:w-12 h-0.5 bg-gray-200 mx-1" />}
               </div>
-              {i < 2 && <div className="w-12 h-0.5 bg-gray-200 mx-1" />}
-            </div>
-          ))}
-          <span className="ml-2 text-sm text-gray-500">
+            ))}
+          </div>
+          <span className="sm:ml-2 text-sm text-gray-500">
             {step === STEPS.CHOOSE_ROLE    && 'Choose your role'}
             {step === STEPS.AI_INTERVIEW   && 'Chat with Haven'}
             {step === STEPS.REVIEW_PROFILE && 'Review your profile'}
@@ -102,22 +107,22 @@ export default function OnboardingPage() {
         {/* Step 1: Choose role */}
         {step === STEPS.CHOOSE_ROLE && (
           <div className="text-center">
-            <h1 className="text-3xl font-bold text-gray-900 mb-3">Welcome to HomeShare</h1>
-            <p className="text-gray-600 mb-10">
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">Welcome to HomeShare</h1>
+            <p className="text-gray-600 mb-8 sm:mb-10 text-sm sm:text-base">
               First, tell us how you'd like to use HomeShare.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
               {/* Host card */}
               <button
                 onClick={() => handleRoleSelect('host')}
-                className="p-8 bg-white rounded-2xl border-2 border-transparent hover:border-teal-400 
+                className="p-6 sm:p-8 bg-white rounded-2xl border-2 border-transparent hover:border-teal-400
                            shadow-sm hover:shadow-md transition-all text-left group"
               >
                 <div className="w-14 h-14 mb-4 rounded-full bg-amber-100 flex items-center justify-center
                                 group-hover:bg-amber-200 transition-colors">
                   <span className="text-2xl">🏠</span>
                 </div>
-                <h3 className="text-xl font-semibold text-gray-800 mb-2">I'm a Host</h3>
+                <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-2">I'm a Host</h3>
                 <p className="text-gray-500 text-sm">
                   I have extra space at home and would love to rent a room to a kind, trustworthy person.
                 </p>
@@ -126,14 +131,14 @@ export default function OnboardingPage() {
               {/* Guest card */}
               <button
                 onClick={() => handleRoleSelect('guest')}
-                className="p-8 bg-white rounded-2xl border-2 border-transparent hover:border-teal-400 
+                className="p-6 sm:p-8 bg-white rounded-2xl border-2 border-transparent hover:border-teal-400
                            shadow-sm hover:shadow-md transition-all text-left group"
               >
                 <div className="w-14 h-14 mb-4 rounded-full bg-sky-100 flex items-center justify-center
                                 group-hover:bg-sky-200 transition-colors">
                   <span className="text-2xl">🎒</span>
                 </div>
-                <h3 className="text-xl font-semibold text-gray-800 mb-2">I'm a Guest</h3>
+                <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-2">I'm a Guest</h3>
                 <p className="text-gray-500 text-sm">
                   I'm looking for an affordable, flexible place to live with a welcoming homeowner.
                 </p>
@@ -145,12 +150,12 @@ export default function OnboardingPage() {
         {/* Step 2: Tavus AI Interview */}
         {step === STEPS.AI_INTERVIEW && (
           <div>
-            <div className="text-center mb-8">
-              <h1 className="text-3xl font-bold text-gray-900 mb-3">
+            <div className="text-center mb-6 sm:mb-8">
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">
                 Chat with Haven
               </h1>
-              <p className="text-gray-600">
-                Haven is going to ask you a few friendly questions to understand who you are 
+              <p className="text-gray-600 text-sm sm:text-base">
+                Haven is going to ask you a few friendly questions to understand who you are
                 and what you're looking for. Just talk naturally — it only takes about 5 minutes.
               </p>
             </div>
@@ -161,9 +166,9 @@ export default function OnboardingPage() {
         {/* Step 3: Review profile */}
         {step === STEPS.REVIEW_PROFILE && (
           <div>
-            <div className="text-center mb-8">
-              <h1 className="text-3xl font-bold text-gray-900 mb-3">Review Your Profile</h1>
-              <p className="text-gray-600">
+            <div className="text-center mb-6 sm:mb-8">
+              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-3">Review Your Profile</h1>
+              <p className="text-gray-600 text-sm sm:text-base">
                 Here's what Haven learned about you. Everything looks right? Let's go find some matches!
               </p>
             </div>
