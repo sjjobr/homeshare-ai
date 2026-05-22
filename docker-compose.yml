@@ -1,0 +1,89 @@
+# docker-compose.yml
+# HomeShare AI — local development environment
+# Usage: docker-compose up --build
+
+version: "3.9"
+
+services:
+
+  # ----------------------------------------------------------------
+  # PostgreSQL database
+  # ----------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    container_name: homeshare_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     homeshare
+      POSTGRES_PASSWORD: homeshare_secret
+      POSTGRES_DB:       homeshare
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homeshare"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------
+  # Backend API (Node.js + Express)
+  # ----------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: homeshare_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:          postgresql://homeshare:homeshare_secret@db:5432/homeshare
+      JWT_SECRET:            dev-jwt-secret-change-in-production
+      PORT:                  4000
+      FRONTEND_URL:          http://localhost:5173
+      TAVUS_API_KEY:         ${TAVUS_API_KEY}
+      TAVUS_PERSONA_ID:      ${TAVUS_PERSONA_ID}
+      TAVUS_REPLICA_ID:      ${TAVUS_REPLICA_ID}
+      TAVUS_WEBHOOK_SECRET:  ${TAVUS_WEBHOOK_SECRET}
+      APP_BASE_URL:          http://localhost:4000
+      RESEND_API_KEY:        ${RESEND_API_KEY}
+      FROM_EMAIL:            ${FROM_EMAIL:-hello@homeshare.ai}
+      STRIPE_SECRET_KEY:     ${STRIPE_SECRET_KEY}
+      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_S3_BUCKET:         ${AWS_S3_BUCKET}
+      AWS_REGION:            ${AWS_REGION:-us-east-1}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # ----------------------------------------------------------------
+  # Frontend (React + Vite)
+  # ----------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: homeshare_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_URL:               http://localhost:4000
+      VITE_TAVUS_PERSONA_ID:      ${TAVUS_PERSONA_ID}
+      VITE_STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_data:
