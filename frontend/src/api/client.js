@@ -1,12 +1,13 @@
 /**
  * frontend/src/api/client.js
  * Axios instance pre-configured for the HomeShare AI backend.
- * Automatically attaches the JWT token from Zustand store.
+ * In dev, Vite proxies /api → http://localhost:4000 (see vite.config.js).
+ * In production, set VITE_API_URL in your .env.
  */
 
 import axios from 'axios';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -17,7 +18,7 @@ const api = axios.create({
 });
 
 // -----------------------------------------------------------------------
-// Request interceptor: attach JWT token from localStorage (Zustand persist)
+// Request interceptor: attach JWT token from Zustand persisted store
 // -----------------------------------------------------------------------
 api.interceptors.request.use((config) => {
   try {
@@ -35,15 +36,13 @@ api.interceptors.request.use((config) => {
 });
 
 // -----------------------------------------------------------------------
-// Response interceptor: handle 401 (logout) and normalise errors
+// Response interceptor: handle 401 unauthorised → redirect to login
 // -----------------------------------------------------------------------
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear persisted auth state
       localStorage.removeItem('homeshare-storage');
-      // Redirect to login without React Router (avoids circular deps)
       window.location.href = '/login';
     }
     return Promise.reject(error);
